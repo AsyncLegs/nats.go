@@ -1247,6 +1247,24 @@ func UserCredentials(userOrChainedFile string, seedFiles ...string) Option {
 	return UserJWT(userCB, sigCB)
 }
 
+// UserCredentialBytes is a convenience function that takes a file bytes
+// for a user's JWT and a filename for the user's private Nkey seed.
+func UserCredentialBytes(userOrChainedFileBytes []byte, seedFiles ...[]byte) Option {
+	userCB := func() (string, error) {
+		return userFromBytes(userOrChainedFileBytes)
+	}
+	var keyFileBytes []byte
+	if len(seedFiles) > 0 {
+		keyFileBytes = seedFiles[0]
+	} else {
+		keyFileBytes = userOrChainedFileBytes
+	}
+	sigCB := func(nonce []byte) ([]byte, error) {
+		return sigBytesHandler(nonce, keyFileBytes)
+	}
+	return UserJWT(userCB, sigCB)
+}
+
 // UserJWTAndSeed is a convenience function that takes the JWT and seed
 // values as strings.
 func UserJWTAndSeed(jwt string, seed string) Option {
@@ -6026,6 +6044,14 @@ func userFromFile(userFile string) (string, error) {
 	return nkeys.ParseDecoratedJWT(contents)
 }
 
+func userFromBytes(userFileBytes []byte) (string, error) {
+	if len(userFileBytes) == 0 {
+		return _EMPTY_, fmt.Errorf("nats: user file is empty")
+	}
+	defer wipeSlice(userFileBytes)
+	return nkeys.ParseDecoratedJWT(userFileBytes)
+}
+
 func homeDir() (string, error) {
 	if runtime.GOOS == "windows" {
 		homeDrive, homePath := os.Getenv("HOMEDRIVE"), os.Getenv("HOMEPATH")
@@ -6075,12 +6101,34 @@ func nkeyPairFromSeedFile(seedFile string) (nkeys.KeyPair, error) {
 	return nkeys.ParseDecoratedNKey(contents)
 }
 
+func nkeyPairFromSeedFileBytes(seedFileBytes []byte) (nkeys.KeyPair, error) {
+	if len(seedFileBytes) == 0 {
+		return nil, fmt.Errorf("nats: seed file is empty")
+	}
+	defer wipeSlice(seedFileBytes)
+	return nkeys.ParseDecoratedNKey(seedFileBytes)
+}
+
 // Sign authentication challenges from the server.
 // Do not keep private seed in memory.
 func sigHandler(nonce []byte, seedFile string) ([]byte, error) {
 	kp, err := nkeyPairFromSeedFile(seedFile)
 	if err != nil {
 		return nil, fmt.Errorf("unable to extract key pair from file %q: %w", seedFile, err)
+	}
+	// Wipe our key on exit.
+	defer kp.Wipe()
+
+	sig, _ := kp.Sign(nonce)
+	return sig, nil
+}
+
+// Sign authentication challenges from the server.
+// Do not keep private seed in memory.
+func sigBytesHandler(nonce []byte, seedFileBytes []byte) ([]byte, error) {
+	kp, err := nkeyPairFromSeedFileBytes(seedFileBytes)
+	if err != nil {
+		return nil, fmt.Errorf("unable to extract key pair from file: %w", err)
 	}
 	// Wipe our key on exit.
 	defer kp.Wipe()
